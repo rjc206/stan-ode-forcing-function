@@ -1,0 +1,690 @@
+---
+title: Using forcing functions in ordinary differential equations (ODEs) in Stan
+output:
+  # Use "default" placeholders below to later customize any of the output
+  # formats as needed.
+  html_document:
+    toc: true
+    number_sections: true
+  pdf_document:
+    default
+  md_document:
+    default
+---
+
+# Overview
+
+Ordinary differential equations (ODEs)
+are widely used for mathematical modeling
+of natural systems.
+A less common
+but critical
+ODE solver input
+is the incorporation of fixed temporal data
+representing a process whose underlying equation is unknown,
+called a forcing function.
+Forcing functions are more readily supported
+in lower-level programming languages
+than in higher-level, domain-specific programming languages (DSLs)
+like Stan
+that allow fewer mathematical primitives
+and are more complex to extend.
+The sections below
+explain
+how to use a forcing function
+with the widely used 2-equation predator--prey ODEs example,
+also called Lotka--Volterra.
+
+# Preamble
+
+First, load the libraries we will need for the entire exercise.
+
+```{r load-libraries}
+#| cache: false
+library(rstan)
+library(deSolve)
+library(posterior)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+Data science libraries of `dplyr`, `tidyr` and `ggplot2`
+require little introduction for many R users.
+
+> **Note:**
+> Those less familiar
+> can learn about them
+> from the freely available Carpentries lesson
+> *R for Reproducible Scientific Analysis*
+> (<https://swcarpentry.github.io/r-novice-gapminder/>)
+> and, for a more depth, the excellent freely available book
+> *R for Data Science*
+> (<https://r4ds.hadley.nz/>).
+
+While we our primarily goal is to use `rstan` to solve the ODEs,
+we use `deSolve` to generate the *ground truth* data;
+ground truth data here refers to
+generating observations with known *true* parameters
+so that we can assess how well
+the fitted parameters
+compare with the true parameters.
+
+> **Note:**
+> It is also possible to use Stan (`rstan`) itself
+> to generate the ground truth data,
+> as described in the
+> Stan User's Guide >
+> Example Models >
+> Ordinary Differential Equations >
+> Measurement error models.
+> But for simplicity,
+> we use R's popular `deSolve` package
+> to use familiar R code where possible.
+
+A well written Stan model
+should be relatively insensitive to initial conditions.
+The example below,
+demostrates a case of undesirable sensitivity to initial conditions.
+The `posterior` package
+simplifies inspecting the data wrangling work
+to visualize the ODE parameters accepted by Stan
+for each chain to troubleshoot disagreement among chains.
+
+# Typical ODEs without a forcing function
+
+## Equations in R
+
+The Lottka--Volterra equations are:
+
+$$
+\begin{aligned}
+\frac{dx}{dt} &= \phantom{-} \alpha x - \beta x y \\
+\frac{dy}{dt} &= - \gamma y + \delta x y \\
+\end{aligned}
+$$
+where,
+
+State variables:
+$$
+\begin{aligned}
+x &: \text{Population of prey} \\
+y &: \text{Population of predators} \\
+\end{aligned}
+$$
+Parameters:
+$$
+\begin{aligned}
+\alpha &: \text{Growth rate of prey} \\
+\beta &: \text{Death rate of prey due to predators} \\
+\gamma &: \text{Death rate of predators} \\
+\delta &: \text{Growth rate of predators due to prey}
+\end{aligned}
+$$
+
+To code these equations in R,
+we need to wrap them in a function
+with specific function arguments
+common to many ODE solvers,
+namely,
+the time vector,
+the list of state variables,
+and then the list of parameters.
+Therefore,
+the input to `ode()` of the `deSolve` package
+is written as:
+
+```{r eqs-lv}
+#| cache: true
+lv <- function(t, state, params) {
+  with(as.list(c(state, params)), {
+    dx <-  a * x - b * x * y
+    dy <- -g * y + d * x * y
+    return(list(c(dx, dy)))
+  })
+}
+```
+
+The `with()` function above makes the contents of the lists
+`state` and `params` appear in the environment
+without needing to explicitly refer to them
+with the `$` operator such as
+`state$x` or `params$a`;
+this makes the function code more legible
+and more closely resemble the mathematical equations.
+However,
+it's generally considered bad practice in R
+to use the `with()` function
+outside of specific functions
+that require unpacking many list arguments.
+
+## Generate noisy input data with known ODE parameters
+
+A common statistical practice
+is to generate data with known parameters
+so that we can test
+how well a method or model
+is able to recover the parameters used to generate the data.
+Therefore,
+we next simulate ODE data
+using known parameters
+`a`, `b`, `g`, and `d`
+(i.e. $\alpha$, $\beta$, $\gamma$, and $\delta$).
+Additionally,
+we need to assume a known initial condition
+$x_0$ and $y_0$
+stored in the vector `true_y0`.
+Lastly,
+to make the parameter fitting
+more challenging and realistic to real-world observations,
+we add simulated noise.
+
+```{r simulate-ground-truth}
+#| cache: true
+#| depend: -1
+times <- seq(0, 15, by = 0.5)
+true_y0 <- c(x = 10, y = 5.0)
+true_params <- c(
+  a = 1.0,
+  b = .5,
+  g = 1.5,
+  d = 0.7
+)
+## Solve the ODEs, then add noise to each variable using rnorm.
+pristine <- ode(
+  y = true_y0,
+  times = times,
+  func = lv,
+  parms = true_params)
+noisy <- pristine
+set.seed(123)
+noisy[, -1] <-
+  pristine[, -1] + rnorm(nrow(pristine) * (ncol(pristine) - 1),
+                         sd = 0.5)
+noisy[noisy < 0] <- 0
+```
+
+Using `ode()` above only solves the system of equations
+at the timepoints specified by `times`.
+The simulated "pristine" and "noisy" data points are shown below,
+although from here on we will only use the noisy simulated data.
+
+```{r plot-noise-added-to-ground-truth}
+#| cache: true
+#| dependson: -1
+bind_rows(pristine = as.data.frame(pristine),
+          noisy = as.data.frame(noisy),
+          .id = "type") |>
+  pivot_longer(-c(type:time), names_to = "var") |>
+  mutate(type = factor(type, levels = c("pristine", "noisy"))) |>
+  ggplot(aes(time, value, color = var)) +
+  theme_bw() +
+  facet_wrap(~ type, ncol = 1) +
+  geom_line() +
+  geom_point()
+```
+
+## Fit the ODE parameters using the equivalent Stan model
+
+The model we are going to fit
+is saved in a separate `lv.stan` file
+that looks like this:
+<!--
+The chunk below prints the lv.stan file.
+We don't actually need to store the model into `output.var`
+and the value of the output.var is never used,
+but we will get an error if we don't store into `output.var`.
+-->
+
+```{stan lv.stan, code = readLines("lv.stan"), output.var = "lv.stan", cache = TRUE}
+```
+
+Call the `stan()` function
+to supply the inputs
+to the model described above in the `lv.stan` file:
+
+```{r simulate-stan}
+#| cache: true
+#| dependson: -3
+fit1 <- stan(
+  model_name = "lotka-volterra",
+  chains = 4,
+  cores = 4,
+  warmup = 1000,
+  iter = 5000,
+  file = "lv.stan",
+  data = list(
+    T = nrow(noisy) - 1,
+    y = noisy[-1, c("x", "y")],
+    y0 = true_y0,
+    t0 = 0,
+    ts = noisy[-1, "time"],
+    g = true_params["g"],
+    d = true_params["d"]),
+  seed = 12345
+)
+```
+
+We get warnings
+about how our initial conditions
+were not able to agree
+and mix together
+that we will explore in the next section.
+
+## Inspect the Stan fit
+
+```{r tab-results}
+#| cache: true
+#| dependson: -1
+## Numerical summary of the fits.
+fit1
+
+## Parameter plot of the fits.
+plot(fit1)
+
+## Find initial values creating problems with chains converging.
+traceplot(fit1, inc_warmup = TRUE, window = c(0, 200))
+
+## Show all samples including warmup.
+traceplot(fit1, inc_warmup = TRUE)
+
+## Show the pairs plot.
+pairs(fit1, pars = c("a", "b", "lp__"))
+
+## Plot ODEs using a sample of 100 parameters from each of the chains.
+n <- 100
+set.seed(123)
+posterior::as_draws_df(fit1) |>
+  select(.chain, .iteration, a, b) |>
+  group_by(.chain) |>
+  ## Sample greater variation by only choosing one sample from each ntile.
+  mutate(qa = ntile(a, n / 5),
+         qb = ntile(b, n / 5)) |>
+  group_by(.chain, qa, qb) |>
+  sample_n(1) |>
+  ## Now sample the 100 parameters from each chain.
+  group_by(.chain) |>
+  sample_n(n) |>
+  ungroup() |>
+  rowwise() |>
+  mutate(mat = list(
+    ode(
+      y = true_y0,
+      times = times,
+      func = lv,
+      parms = list(
+        a = a,
+        b = b,
+        g = true_params["g"],
+        d = true_params["d"])) |>
+      as.data.frame())) |>
+  unnest(cols = "mat") |>
+  ungroup() |>
+  pivot_longer(-c(.chain:time), names_to = "var") |>
+  mutate(.chain = as.factor(.chain)) |>
+  ggplot(aes(x = time,
+             y = value,
+             group = interaction(.chain, .iteration, var),
+             color = var)) +
+  theme_bw() +
+  facet_wrap(~ .chain, labeller = "label_both") +
+  geom_line()
+```
+
+In the last plot above
+that shows 100 ODE samples simulated by each of the 4 chains,
+we see that one of the chains
+is not able to capture the true periodicity.
+This is because of two reasons:
+(1) the oscillatory ODE system contains "peaks"
+of higher posterior probabilities
+and moving between these "peaks" is hard
+and (2) we are using large priors
+`a ~ normal(0.5, 0.5)` and `b ~ normal(0.5, 0.5)`:
+
+```{r}
+#| cache: true
+## Plot the priors for `a` and `b` used in the Stan model.
+data.frame(x = seq(0, 10, .1)) |>
+  ggplot(aes(x)) +
+  theme_bw() +
+  stat_function(fun = dlnorm,
+                args = c(meanlog = 0.5,
+                         sdlog = 0.5))
+```
+
+But the
+bottom row of the
+pairs plot
+further above
+shows that the values of `b` ($\beta$)
+around 0.5 have the highest `lp__` (log-probability)
+and that values of `a` ($\alpha$)
+around 1.0 have the highest `lp__`;
+0.5 and 1.0 are indeed their true values.
+We often learn more when things go "wrong"
+and hopefully reading these diagnostic plots
+has helped you learn a little more about troubleshooting
+models that do not perfectly fit the noisy data!
+
+# ODE with a forcing function
+
+## Modified equations in R
+
+Finally!
+We get to discuss the main topic about
+how to use a forcing function
+when the equation of a state variable is unknown.
+Let's say that we did not know
+the equation terms for the predator state variable, `y`.
+Then, instead of two ODEs, we need to solve a single ODE.
+But we must replace the `y` term in the `x` equation
+with a fixed trajectory of `y`.
+
+Before we had:
+
+$$
+\begin{aligned}
+\frac{dx}{dt} &= \phantom{-} \alpha x - \beta x y \\
+\frac{dy}{dt} &= - \gamma y + \delta x y \\
+\end{aligned}
+$$
+
+Now we have only the first equation and
+pretend we do not yet know the process that governs the second equation:
+
+$$
+\frac{dx}{dt} = \phantom{-} \alpha x - \beta x y \\
+$$
+
+We cannot fix `y` as a single value;
+`y` must vary in some way because `x` varies
+and `y` and `x` influence eachother.
+So we must supply a fixed trajectory of `y`
+based on the noisy data
+that only depends on time
+because `y` is no longer part of the system of equations
+that the ODE solver has access to.
+We must define an external function
+that produces a fixed trajectory of `y`.
+
+Ideally,
+we would use a spline function.
+Splines are wonderful mathematical funtions
+because they're differentiable
+while still allowing us to fit complex, squiggly looking curves.
+However,
+spline functions are
+numerically harder to implement
+and Stan does not yet provide the mathematical primitives
+to easily add them.
+Therefore,
+we will use a simpler polynomial function:
+
+$$
+\begin{aligned}
+\frac{dy}{dt} &= c_n t^n + c_{n-1} t^{n-1} \ldots + c_2 t^2 + c_1 t^1 + c_0 t^0 \\
+\implies
+\frac{dy}{dt} &= \sum_{i=0}^n c_i t^i \\
+\end{aligned}
+$$
+
+Where,
+the polynomial terms are $t_0, t_1, t_2, \ldots, t_{n-1}, t_n$
+and their corresponding coefficients are $c_0, c_1, c_2 \ldots, c_{n-1}, c_n$.
+
+
+> **Note:**
+> Unlike a spline function,
+> a polynomial function has trouble fitting periodic data.
+> See the plot below.
+
+```{r poly-choose}
+#| cache: true
+#| dependson: "simulate-ground-truth"
+## Plot different degrees of polynomials fit to the prey data.
+max_time <- 7
+max_degree <- length(times[times <= max_time]) - 2
+fit_poly <- list()
+for (i in seq_len(max_degree)) {
+  fit_poly[[i]] <-
+    lm(y ~ poly(time, i),
+       data =
+         noisy[, c("time", "y")] |>
+         as.data.frame() |>
+         filter(time <= max_time))
+}
+noisy |>
+  as.data.frame() |>
+  filter(time <= max_time) |>
+  mutate(across(time,
+                setNames(lapply(seq_len(max_degree),
+                                function(i) {
+                                  return(function(time) predict(fit_poly[[i]]))
+                                }),
+                         paste0("y_poly_", seq_len(max_degree))))) |>
+  pivot_longer(-c(time:y), names_to = "degree") |>
+  mutate(degree =
+           sub("time_y_poly_", "", degree) |>
+           as.integer()) |>
+  ggplot(aes(time, value)) +
+  facet_wrap(~ degree) +
+  geom_line() +
+  geom_point(aes(y = y))
+
+## T-test showing other than the intercept, terms up to and including degree
+## that captures the most variance.
+summary(fit_poly[[length(fit_poly)]])
+
+## Choose our polynomial degree based on the first p.value elbow.
+degrees <-
+  summary(fit_poly[[length(fit_poly)]]) |>
+  broom::tidy() |>
+  filter(term != "(Intercept)") |>
+  mutate(p_value_cumsum = cumsum(p.value),
+         degree = gsub(term, pattern = ".*[)]", replacement = "") |>
+           as.integer())
+degree <- 3
+degrees |>
+  ggplot(aes(x = degree, y = p_value_cumsum)) +
+  geom_line() +
+  geom_vline(xintercept = degree, linetype = 2)
+## Workaround bug in non-standard evaluation of predict.lm().
+i <- degree
+```
+
+```{r eqs-lv-ff}
+#| cache: true
+#| dependson: -1
+## Now generate the ODE data using the forcing function (using t) and
+## ignore any input for predator (dy).
+y <- function(t) {
+  predator <- predict(fit_poly[[degree]], data.frame(time = t))
+  if (predator < 0) {
+    return(0)
+  }
+  predator
+}
+lv_poly <- function(t, state, params) {
+  with(as.list(c(state, params)), {
+    ## Save computation time by not recalculating y(t) everytime.
+    y_ <- y(t)
+    dx <- a * x - b * x * y_
+    return(list(c(dx)))
+  })
+}
+```
+
+```{r plot-lv-ff}
+#| cache: true
+#| dependson: -1
+fit_ode_ff <- ode(
+  y = noisy[1, "x"],
+  times = times[times <= max_time],
+  func = lv_poly,
+  parms = true_params[c("a", "b")])
+noisy |>
+  as.data.frame() |>
+  filter(times <= max_time) |>
+  rename_with(~ paste0(.x, "_orig"), -time) |>
+  bind_cols(x_ff = fit_ode_ff[, 2]) |>
+  bind_cols(y_ff = sapply(times[times <= max_time], y)) |>
+  pivot_longer(-time) |>
+  separate_wider_delim(name, delim = "_", names = c("name", "type")) |>
+  mutate(type = factor(type, levels = c("orig", "ff"))) |>
+  ggplot(aes(time, value, group = name, color = name)) +
+  facet_wrap(~ type) +
+  geom_line() +
+  geom_point(data = . %>%
+               filter(type == "orig") %>%
+               mutate(type = factor("ff", levels = c("orig", "ff"))))
+```
+
+## Fit the ODE parameters using the equivalent modified Stan model
+
+We implement these equations in the Stan code.
+
+The model we are going to fit
+is saved in a separate `lv-forcing-function.stan` file
+that looks like this:
+<!--
+The chunk below prints the lv.stan file.
+We don't actually need to store the model into `output.var`
+and the value of the output.var is never used,
+but we will get an error if we don't store into `output.var`.
+-->
+
+```{stan lv-ff.stan, code = readLines("lv-forcing-function.stan"), output.var = "lvff.stan", cache = TRUE}
+```
+
+```{r simulate-stan-forcing-function}
+#| cache: true
+#| dependson: -3
+## Run Stan using the same forcing function.
+fit_stan <-
+  stan(
+    model_name = "lotka-volterrs-forcing-function",
+    chains = 4,
+    cores = 4,
+    warmup = 1000,
+    iter = 5000,
+    file = "lv-forcing-function.stan",
+    data = list(
+      ## Must remove the row containing timepoint 0 and instead
+      ## provide it with the initial conditions.
+      ##
+      ## Dimensions:
+      T = sum(times > 0 & times <= max_time),
+      V = ncol(noisy) - 2L,
+      ## Experimental data:
+      ts = times[times > 0 & times <= max_time],
+      y = noisy[which(times > 0 & times <= max_time), "x", drop = FALSE],
+      ## Coefficients of fitted polynomial:
+      N_coef = length(coef(fit_poly[[degree]])),
+      coef = coef(fit_poly[[degree]]),
+      ## Initial conditions:
+      t0 = 0,
+      y0 = as.array(noisy[1, "x"])),
+    seed = 123
+)
+```
+
+## Inspect the Stan forcing function fit
+
+```{r tab-results-forcing-function}
+#| cache: true
+#| dependson: -1
+fit_stan
+
+plot(fit_stan)
+
+traceplot(fit_stan)
+
+traceplot(fit_stan, inc_warmup = TRUE, window = c(0, 200))
+
+pairs(fit_stan, pars = c("a", "b", "lp__"))
+
+## Plot ODEs using a sample of 100 parameters from each of the chains.
+set.seed(123) # For sample_n below.
+## Running the ODEs here takes about minute to run (4 chains x 100 samples x
+## 70 timepoints).
+n <- 100
+system.time({
+  df_stan_fit <-
+    posterior::as_draws_df(fit_stan) |>
+    select(.chain, .iteration, a, b) |>
+    group_by(.chain) |>
+    ## Sample greater variation by only choosing one sample from each ntile.
+    mutate(qa = ntile(a, n / 4),
+           qb = ntile(b, n / 4)) |>
+    group_by(.chain, qa, qb) |>
+    sample_n(1) |>
+    ## Now sample the 100 parameters from each chain.
+    group_by(.chain) |>
+    sample_n(n) |>
+    ungroup() |>
+    rowwise() |>
+    mutate(mat = list(
+      ode(
+        y = true_y0[1],
+        times = times[times <= max_time],
+        func = lv_poly,
+        parms = list(
+          a = a,
+          b = b)) |>
+        as.data.frame())) |>
+    unnest(cols = "mat") |>
+    rowwise() |>
+    mutate(y = y(time)) |>
+    ungroup() |>
+    pivot_longer(-c(.chain:time), names_to = "var") |>
+    mutate(.chain = as.factor(.chain))
+})
+
+## Plot the fitted ODEs from Stan.
+df_stan_fit |>
+  ggplot(aes(x = time,
+             y = value,
+             group = interaction(.chain, .iteration, var),
+             color = var)) +
+  theme_bw() +
+  facet_wrap(~ .chain) +
+  geom_line() +
+  ## Show the predator data provided to Stan.
+  geom_point(
+    data =
+      noisy[, c("time", "x")] |>
+      as.data.frame() |>
+      pivot_longer(-time),
+    group = NULL,
+    color = NULL,
+    size = 0.1)
+```
+
+# Finishing thoughts
+
+1. Don't simply choose a forcing function only based
+   on how it fits its own data;
+   instead,
+   choose a forcing function
+   by how well the other equations fit their data
+   by running the full ODE system.
+
+1. Spline functions are great as forcing functions,
+   but not always practical to use.
+   Polynomials can work,
+   but may not work well with some types of periodic data;
+   subset the data to timepoints
+   where the fit looks good.
+
+1. You may have noticed `set.seed(...)` used in a few places.
+   This is to make the stochastic code outputs reproducible,
+   but one would typically not use these;
+   it is more common to use store the value of `.Random.seed`
+   to record a seed used for a simulation
+   than to force a specific outcome
+   because well-adjusted simulations should produce
+   very similar results
+   in spite of pseudo-random number generator initial states.
+
+# References

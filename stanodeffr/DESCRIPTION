@@ -1,0 +1,33 @@
+Package: stanodeffr
+Title: Vignette Of Using Forcing Functions in ODEs in RStan
+Version: 0.0.0.9000
+Authors@R: 
+    person("Pariksheet", "Nanda", , "pan79@pitt.edu", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0001-9726-4552")),
+    person("Rocco", "Caprara", "John", "rjc206@pitt.edu", role = "aut",
+           comment = c(ORCID = "0009-0000-5232-2480")),
+    person("Jason", "Shoemaker", "Edward", "jason.shoemaker@pitt.edu",
+           role = "fnd", comment = c(ORCID = "0000-0003-3315-7103"))
+Description: Forcing functions are used in place of ordinary differential
+    equation (ODE) state variables whenever an equation governing the state
+    variable is unknown.  Instead, the equation is replaced with another
+    function that depends only on time instead of any other state variables in
+    the system of ODEs.  Using ODEs is less common in domain-specific
+    programming languages like Stan, therefore this package primarily provides
+    a vignette explaining how to use ODEs in Stan.
+License: Apache License (>= 2)
+Encoding: UTF-8
+Language: en
+LazyData: false
+URL: https://github.com/ImmuSystems-Lab/stan-ode-forcing-function/stanodeffr
+BugReports: https://github.com/ImmuSystems-Lab/stan-ode-forcing-function/issues
+Depends:
+    R (>= 4.5.0)
+Suggests:
+    broom,
+    deSolve,
+    ggplot2,
+    knitr,
+    posterior,
+    rmarkdown,
+    rstan
