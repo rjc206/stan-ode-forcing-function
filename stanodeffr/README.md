@@ -3,7 +3,7 @@ To build the vignettes in R:
 1. Install the dependencies:
 
    ```r
-   if (! length(find.package("remotes"))) install.packages("remotes")
+   if (! require("remotes", quietly = TRUE)) install.packages("remotes")
    remotes::install_deps(dependencies = TRUE)
    ```
 
