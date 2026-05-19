@@ -10,11 +10,11 @@ jobs:
     container:
       image: rocker/verse:4.4.1
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install RStan
         run: |
-          R -q -e 'install.packages(c("rstan", "rstantools", "bayesplot"), repos = "https://cloud.r-project.org")'
+          R -q -e 'install.packages(c("rstan", "rstantools", "bayesplot", "deSolve", "posterior"), repos = "https://cloud.r-project.org")'
 
       - name: Render Rmd
         run: |
