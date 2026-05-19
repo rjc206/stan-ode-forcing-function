@@ -18,7 +18,7 @@ jobs:
 
       - name: Render Rmd
         run: |
-          R -q -e 'rmarkdown::render("stanodeffr/01-stan-ode-forcing-function.Rmd", output_format = "html_document", output_dir = "docs")'
+          R -q -e 'rmarkdown::render("stanodeffr/01-stan-ode-forcing-function.Rmd", output_format = "html_document", output_file = "index.html", output_dir = "docs")'
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
