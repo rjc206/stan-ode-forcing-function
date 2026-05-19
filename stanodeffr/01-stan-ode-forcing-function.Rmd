@@ -656,8 +656,9 @@ df_stan_fit |>
       noisy[, c("time", "x")] |>
       as.data.frame() |>
       pivot_longer(-time),
-    group = NULL,
-    color = NULL,
+    inherit.aes = FALSE,
+    aes(x = time, y = value),
+
     size = 0.1)
 ```
 
