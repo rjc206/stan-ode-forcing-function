@@ -23,7 +23,7 @@ jobs:
           Rscript -e 'rmarkdown::render("stanodeffr/01-stan-ode-forcing-function.Rmd", output_format = "all", output_dir = "public")'
 
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./docs
