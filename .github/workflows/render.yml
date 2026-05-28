@@ -1,4 +1,5 @@
-﻿name: Render and Deploy to GitHub Pages
+---
+name: Render and Deploy to GitHub Pages
 
 on:
   push:
@@ -8,20 +9,20 @@ jobs:
   render:
     runs-on: ubuntu-latest
     container:
-      image: rocker/verse:4.4.1
+      image: rocker/verse:latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install RStan
         run: |
-          R -q -e 'install.packages(c("rstan", "rstantools", "bayesplot", "deSolve", "posterior"), repos = "https://cloud.r-project.org")'
+          Rscript -e 'pak::local_install_deps("stanodeffr", dependencies = TRUE)'
 
       - name: Render Rmd
         run: |
-          R -q -e 'rmarkdown::render("stanodeffr/01-stan-ode-forcing-function.Rmd", output_format = "html_document", output_dir = "docs")'
+          Rscript -e 'rmarkdown::render("stanodeffr/01-stan-ode-forcing-function.Rmd", output_format = "all", output_dir = "public")'
 
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs
