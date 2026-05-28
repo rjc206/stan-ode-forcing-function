@@ -1,4 +1,5 @@
-﻿name: Render and Deploy to GitHub Pages
+---
+name: Render and Deploy to GitHub Pages
 
 on:
   push:
