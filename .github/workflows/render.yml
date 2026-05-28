@@ -21,6 +21,17 @@ jobs:
       - name: Render Rmd
         run: |
           Rscript -e 'rmarkdown::render("stanodeffr/01-stan-ode-forcing-function.Rmd", output_format = "all", output_dir = "public")'
+      - name: Create index.html pages to see all vignette files
+        run: |
+          cd public/
+          apt update
+          apt -y install tree
+          tree -H '.' \
+            -T 'Vignettes for Stan ODE forcing function' \
+            -I index.html \
+            --noreport \
+            --houtro "" \
+            -o index.html
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4.1.0
