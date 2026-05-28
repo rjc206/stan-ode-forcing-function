@@ -24,11 +24,15 @@ BugReports: https://github.com/ImmuSystems-Lab/stan-ode-forcing-function/issues
 Depends:
     R (>= 4.5.0)
 Suggests:
+    bayesplot,
     BH,
     broom,
     deSolve,
     ggplot2,
     knitr,
     posterior,
+    RcppEigen,
+    RcppParallel,
     rmarkdown,
-    rstan
+    rstan,
+    StanHeaders
