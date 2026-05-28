@@ -25,6 +25,7 @@ jobs:
       - name: Render Rmd
         run: |
           Rscript -e 'rmarkdown::render("stanodeffr/01-stan-ode-forcing-function.Rmd", output_format = "all", output_dir = "public")'
+
       - name: Create index.html pages to see all vignette files
         run: |
           cd public/
@@ -33,6 +34,7 @@ jobs:
           tree -H '.' \
             -T 'Vignettes for Stan ODE forcing function' \
             -I index.html \
+            -I 01-stan-ode-forcing-function_files \
             --noreport \
             --houtro "" \
             -o index.html
