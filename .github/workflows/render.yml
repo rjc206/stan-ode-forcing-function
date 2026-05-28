@@ -16,7 +16,7 @@ jobs:
 
       - name: Install RStan
         run: |
-          R -q -e 'install.packages(c("rstan", "rstantools", "bayesplot", "deSolve", "posterior"), repos = "https://cloud.r-project.org")'
+          Rscript -e 'pak::local_install_deps("stanodeffr", dependencies = TRUE)'
 
       - name: Render Rmd
         run: |
