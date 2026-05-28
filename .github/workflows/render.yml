@@ -17,6 +17,10 @@ jobs:
       - name: Install RStan
         run: |
           Rscript -e 'pak::local_install_deps("stanodeffr", dependencies = TRUE)'
+      
+      - name: Install LaTeX packages
+        run: |
+          Rscript -e 'tinytex::tlmgr_install("amsfonts")'
 
       - name: Render Rmd
         run: |
